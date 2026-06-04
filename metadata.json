@@ -1,0 +1,6 @@
+{
+  "name": "Tyre Billed Stock Tracker",
+  "description": "Save, retrieve, and track tyre stock billed by tyre companies. Synchronized with Google Sheets, featuring low stock and old stock alerts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
