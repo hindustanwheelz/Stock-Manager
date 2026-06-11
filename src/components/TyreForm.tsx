@@ -56,8 +56,7 @@ export const TyreForm: React.FC<TyreFormProps> = ({
         setSaleInvoiceNo(editingRecord.invoiceNo);
         setSaleBrand(editingRecord.brand);
         setSalePattern(editingRecord.pattern);
-        setSaleDot(editingRecord.dot);
-        setSaleQty(Math.abs(editingRecord.quantity));
+        setSaleDotQtys([{ dot: editingRecord.dot, quantity: Math.abs(editingRecord.quantity) }]);
       }
     }
   }, [editingRecord]);
@@ -74,8 +73,7 @@ export const TyreForm: React.FC<TyreFormProps> = ({
       // Reset Outward
       setSaleBrand('');
       setSalePattern('');
-      setSaleDot('');
-      setSaleQty(1);
+      setSaleDotQtys([{ dot: '', quantity: 1 }]);
       setSaleInvoiceNo('SOLD');
     }
   }, [editingGroup, editingRecord]);
@@ -104,8 +102,7 @@ export const TyreForm: React.FC<TyreFormProps> = ({
   const [saleInvoiceNo, setSaleInvoiceNo] = useState('SOLD');
   const [saleBrand, setSaleBrand] = useState('');
   const [salePattern, setSalePattern] = useState('');
-  const [saleDot, setSaleDot] = useState('');
-  const [saleQty, setSaleQty] = useState<number>(1);
+  const [saleDotQtys, setSaleDotQtys] = useState<DoTQty[]>([{ dot: '', quantity: 1 }]);
 
   // ==========================================
   // DYNAMIC LIVE STOCK COMPUTATIONS (FOR OUTWARD SELECTION)
@@ -183,19 +180,36 @@ export const TyreForm: React.FC<TyreFormProps> = ({
   const handleSaleBrandChange = (val: string) => {
     setSaleBrand(val);
     setSalePattern('');
-    setSaleDot('');
-    setSaleQty(1);
+    setSaleDotQtys([{ dot: '', quantity: 1 }]);
   };
 
   const handleSalePatternChange = (val: string) => {
     setSalePattern(val);
-    setSaleDot('');
-    setSaleQty(1);
+    setSaleDotQtys([{ dot: '', quantity: 1 }]);
   };
 
-  const handleSaleDotChange = (val: string) => {
-    setSaleDot(val);
-    setSaleQty(1);
+  const handleAddSaleDotRow = () => {
+    setSaleDotQtys([...saleDotQtys, { dot: '', quantity: 1 }]);
+  };
+
+  const handleRemoveSaleDotRow = (index: number) => {
+    if (saleDotQtys.length === 1) return;
+    const newRows = [...saleDotQtys];
+    newRows.splice(index, 1);
+    setSaleDotQtys(newRows);
+  };
+
+  const handleSaleDotChange = (idx: number, val: string) => {
+    const newRows = [...saleDotQtys];
+    newRows[idx].dot = val;
+    newRows[idx].quantity = 1; // Reset quantity to default on dot change
+    setSaleDotQtys(newRows);
+  };
+
+  const handleSaleQtyChange = (idx: number, val: number, maxAvailable: number) => {
+    const newRows = [...saleDotQtys];
+    newRows[idx].quantity = Math.min(maxAvailable, Math.max(1, val));
+    setSaleDotQtys(newRows);
   };
 
   // Extract unique brands and patterns for smart autocomplete (Inward Mode)
@@ -286,9 +300,9 @@ export const TyreForm: React.FC<TyreFormProps> = ({
     if (formMode === 'inward') {
       return dotQtys.reduce((sum, item) => sum + (item.quantity || 0), 0);
     } else {
-      return saleQty || 0;
+      return saleDotQtys.reduce((sum, item) => sum + (item.quantity || 0), 0);
     }
-  }, [formMode, dotQtys, saleQty]);
+  }, [formMode, dotQtys, saleDotQtys]);
 
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -360,13 +374,32 @@ export const TyreForm: React.FC<TyreFormProps> = ({
       if (!saleDate) return setFormError('Please select a valid date of sale');
       if (!saleBrand) return setFormError('Please select a Tyre Brand');
       if (!salePattern) return setFormError('Please select a Pattern / Size');
-      if (!saleDot) return setFormError('Please select the specific DoT');
-      if (!saleQty || saleQty <= 0) return setFormError('Please enter a valid quantity');
 
-      // Cap checks
-      const availableQty = maxAvailableForChosenDot;
-      if (saleQty > availableQty) {
-        return setFormError(`Insufficient stock! Only ${availableQty} units of DoT ${saleDot} are available.`);
+      if (saleDotQtys.length === 0) {
+        return setFormError('Please specify at least one DoT for the sale transaction.');
+      }
+
+      // Check for empty/invalid selections and aggregate total per unique DOT to ensure overall limits
+      const aggregatedQtyByDot: Record<string, number> = {};
+      for (let i = 0; i < saleDotQtys.length; i++) {
+        const item = saleDotQtys[i];
+        if (!item.dot) {
+          return setFormError(`Please select a valid DoT in Row #${i + 1}`);
+        }
+        if (!item.quantity || item.quantity <= 0) {
+          return setFormError(`Please enter a valid sale quantity in Row #${i + 1}`);
+        }
+        aggregatedQtyByDot[item.dot] = (aggregatedQtyByDot[item.dot] || 0) + item.quantity;
+      }
+
+      // Cap bounds verification
+      for (const [dot, totalQty] of Object.entries(aggregatedQtyByDot)) {
+        const maxAvailable = getMaxAvailableForDot(dot);
+        if (totalQty > maxAvailable) {
+          return setFormError(
+            `Insufficient stock! You requested ${totalQty} units of DoT ${dot}, but only ${maxAvailable} are available.`
+          );
+        }
       }
 
       try {
@@ -376,21 +409,19 @@ export const TyreForm: React.FC<TyreFormProps> = ({
             invoiceNo: saleInvoiceNo.trim().toUpperCase() || 'SOLD',
             brand: saleBrand,
             pattern: salePattern,
-            dot: saleDot,
-            quantity: -saleQty,
+            dot: saleDotQtys[0].dot,
+            quantity: -saleDotQtys[0].quantity,
           };
           await onUpdateRecord(editingRecord.rowId, updatedRecord);
         } else {
-          const recordsToSave: Omit<TyreRecord, 'rowId'>[] = [
-            {
-              date: saleDate,
-              invoiceNo: saleInvoiceNo.trim().toUpperCase() || 'SOLD',
-              brand: saleBrand,
-              pattern: salePattern,
-              dot: saleDot,
-              quantity: -saleQty, // Negative value signifies sales / removals
-            },
-          ];
+          const recordsToSave: Omit<TyreRecord, 'rowId'>[] = saleDotQtys.map((row) => ({
+            date: saleDate,
+            invoiceNo: saleInvoiceNo.trim().toUpperCase() || 'SOLD',
+            brand: saleBrand,
+            pattern: salePattern,
+            dot: row.dot,
+            quantity: -row.quantity, // Negative value signifies sales / removals
+          }));
 
           await onSave(recordsToSave);
         }
@@ -398,8 +429,7 @@ export const TyreForm: React.FC<TyreFormProps> = ({
         // Reset Sale Form
         setSaleBrand('');
         setSalePattern('');
-        setSaleDot('');
-        setSaleQty(1);
+        setSaleDotQtys([{ dot: '', quantity: 1 }]);
         setSaleInvoiceNo('SOLD');
       } catch (err: any) {
         setFormError(err.message || 'Error occurred while recording sale transactions.');
@@ -427,21 +457,21 @@ export const TyreForm: React.FC<TyreFormProps> = ({
     return dots;
   }, [saleBrand, salePattern, liveStock, editingRecord]);
 
-  // Total stock quantity for the currently chosen Dot dynamically
-  const maxAvailableForChosenDot = useMemo(() => {
-    if (!saleBrand || !salePattern || !saleDot) return 0;
-    const baseQty = liveStock.balances[saleBrand]?.[salePattern]?.[saleDot] || 0;
+  // Dynamic stock limit query per individual DOT
+  const getMaxAvailableForDot = (dot: string): number => {
+    if (!saleBrand || !salePattern || !dot) return 0;
+    const baseQty = liveStock.balances[saleBrand]?.[salePattern]?.[dot] || 0;
     if (
       editingRecord &&
       editingRecord.quantity < 0 &&
       editingRecord.brand.trim().toLowerCase() === saleBrand.trim().toLowerCase() &&
       editingRecord.pattern.trim().toLowerCase() === salePattern.trim().toLowerCase() &&
-      editingRecord.dot.trim() === saleDot.trim()
+      editingRecord.dot.trim() === dot.trim()
     ) {
       return baseQty + Math.abs(editingRecord.quantity);
     }
     return baseQty;
-  }, [saleBrand, salePattern, saleDot, liveStock, editingRecord]);
+  };
 
   const isEditing = !!(editingGroup || editingRecord);
   const isEditingSale = !!(editingRecord && editingRecord.quantity < 0);
@@ -823,7 +853,7 @@ export const TyreForm: React.FC<TyreFormProps> = ({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {/* Select Brand Option Dropdown */}
                   <div className="relative">
                     <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1 flex items-center gap-1">
@@ -862,73 +892,108 @@ export const TyreForm: React.FC<TyreFormProps> = ({
                       ))}
                     </select>
                   </div>
-
-                  {/* Select DoT Option Dropdown */}
-                  <div className="relative">
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1 flex items-center gap-1">
-                      <Hash className="h-3 w-3 text-rose-500" />
-                      <span>Available DoT</span>
-                    </label>
-                    <select
-                      value={saleDot}
-                      onChange={(e) => handleSaleDotChange(e.target.value)}
-                      disabled={!salePattern}
-                      className="w-full bg-white border border-gray-200 focus:border-rose-500 focus:ring-1 focus:ring-rose-500 text-sm py-2.5 px-3 rounded-lg outline-none cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed font-mono"
-                      required
-                    >
-                      <option value="">-- Choose DOT --</option>
-                      {saleBrand && salePattern && currentAvailableDots.map((dObj) => (
-                        <option key={dObj.dot} value={dObj.dot}>
-                          DoT {dObj.dot} ({dObj.qty} left)
-                        </option>
-                      ))}
-                    </select>
-                  </div>
                 </div>
 
-                {/* Sell Quantity Numeric Selector with live limits */}
-                {saleDot && (
-                  <div className="bg-rose-50/20 p-4 border border-rose-100 rounded-xl mt-2">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                      <div>
-                        <span className="text-xs font-bold text-rose-800 uppercase tracking-wide block">
-                          Stock Availability Limit
+                {/* DOT & Quantities Sub-Form Group for Outward (Sales) */}
+                {saleBrand && salePattern && (
+                  <div className="bg-rose-50/10 rounded-xl p-4 border border-rose-100 mt-4">
+                    <div className="flex justify-between items-center mb-3">
+                      <h3 className="text-[10px] font-bold uppercase tracking-wider text-rose-800 flex items-center gap-1.5">
+                        <span>Weeks of Production & Quantities to Sell</span>
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-50 text-rose-700 font-mono">
+                          {saleDotQtys.length} Row{saleDotQtys.length > 1 ? 's' : ''}
                         </span>
-                        <span className="text-xs text-gray-500">
-                          Exactly <b className="font-mono text-gray-800">{maxAvailableForChosenDot}</b> tyres with DoT {saleDot} are sitting in stock.
-                        </span>
-                      </div>
+                      </h3>
+                      
+                      {/* Add dynamic check: do not allow adding multiple DOT rows when editing an individual single record */}
+                      {!editingRecord && (
+                        <button
+                          type="button"
+                          onClick={handleAddSaleDotRow}
+                          className="inline-flex items-center gap-1 text-xs font-medium text-rose-700 hover:text-rose-900 hover:bg-rose-50 px-2 py-1 rounded transition-colors cursor-pointer"
+                        >
+                          <Plus className="h-3.5 w-3.5" />
+                          <span>Add Another DoT</span>
+                        </button>
+                      )}
+                    </div>
 
-                      <div className="flex items-center gap-3">
-                        <span className="text-xs font-semibold text-gray-500">Qty Sold:</span>
-                        <div className="w-32 flex items-center border border-rose-200 bg-white rounded-lg">
-                          <button
-                            type="button"
-                            onClick={() => setSaleQty(Math.max(1, saleQty - 1))}
-                            disabled={saleQty <= 1}
-                            className="px-2.5 py-2 text-gray-400 hover:text-gray-600 disabled:opacity-30 disabled:pointer-events-none text-sm font-medium border-r border-rose-100 cursor-pointer"
-                          >
-                            -
-                          </button>
-                          <input
-                            type="number"
-                            min="1"
-                            max={maxAvailableForChosenDot}
-                            value={saleQty || ''}
-                            onChange={(e) => setSaleQty(Math.min(maxAvailableForChosenDot, Math.max(1, parseInt(e.target.value, 10) || 1)))}
-                            className="w-full text-center text-sm font-mono outline-none border-none py-1.5 focus:ring-0 font-bold"
-                            required
-                          />
-                          <button
-                            type="button"
-                            onClick={() => setSaleQty(Math.min(maxAvailableForChosenDot, saleQty + 1))}
-                            disabled={saleQty >= maxAvailableForChosenDot}
-                            className="px-2.5 py-2 text-gray-400 hover:text-gray-600 disabled:opacity-30 disabled:pointer-events-none text-sm font-medium border-l border-rose-100 cursor-pointer"
-                          >
-                            +
-                          </button>
-                        </div>
-                      </div>
+                    <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                      {saleDotQtys.map((item, idx) => {
+                        const availableForDot = getMaxAvailableForDot(item.dot);
+                        return (
+                          <div key={idx} className="flex gap-3 items-center">
+                            <span className="text-[10px] font-mono font-medium text-rose-400 w-6">
+                              #{idx + 1}
+                            </span>
+
+                            {/* DoT Dropdown Selector */}
+                            <div className="relative flex-1">
+                              <select
+                                value={item.dot}
+                                onChange={(e) => handleSaleDotChange(idx, e.target.value)}
+                                className="w-full bg-white border border-gray-200 focus:border-rose-500 focus:ring-1 focus:ring-rose-500 text-sm py-2 px-3 rounded-lg outline-none cursor-pointer font-mono font-bold"
+                                required
+                              >
+                                <option value="">-- Choose DOT --</option>
+                                {currentAvailableDots.map((dObj) => (
+                                  <option key={dObj.dot} value={dObj.dot}>
+                                    DoT {dObj.dot} ({getMaxAvailableForDot(dObj.dot)} left)
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+
+                            {/* Quantity Selector */}
+                            <div className="w-24 md:w-32 flex items-center border border-rose-200 bg-white rounded-lg">
+                              <button
+                                type="button"
+                                onClick={() => handleSaleQtyChange(idx, item.quantity - 1, availableForDot)}
+                                disabled={item.quantity <= 1 || !item.dot}
+                                className="px-2.5 py-2 text-gray-400 hover:text-gray-600 disabled:opacity-30 disabled:pointer-events-none text-sm font-medium border-r border-rose-100 cursor-pointer font-bold"
+                              >
+                                -
+                              </button>
+                              <input
+                                type="number"
+                                min="1"
+                                max={availableForDot}
+                                value={item.dot ? (item.quantity || '') : ''}
+                                onChange={(e) => handleSaleQtyChange(idx, parseInt(e.target.value, 10) || 1, availableForDot)}
+                                disabled={!item.dot}
+                                className="w-full text-center text-sm font-mono outline-none border-none py-1.5 focus:ring-0 font-bold"
+                                required
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleSaleQtyChange(idx, item.quantity + 1, availableForDot)}
+                                disabled={item.quantity >= availableForDot || !item.dot}
+                                className="px-2.5 py-2 text-gray-400 hover:text-gray-600 disabled:opacity-30 disabled:pointer-events-none text-sm font-medium border-l border-rose-100 cursor-pointer font-bold"
+                              >
+                                +
+                              </button>
+                            </div>
+
+                            {/* Actions - hide trash button if editing an individual pre-filed record */}
+                            {!editingRecord && (
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveSaleDotRow(idx)}
+                                disabled={saleDotQtys.length === 1}
+                                className="p-2 text-gray-300 hover:text-red-500 disabled:opacity-30 disabled:pointer-events-none bg-white border border-gray-200 hover:border-red-100 rounded-lg transition-colors cursor-pointer"
+                                title="Remove row"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <div className="mt-2 text-xs text-rose-600 flex items-center gap-1 font-semibold hover:text-rose-700">
+                      <AlertCircle className="h-3.5 w-3.5" />
+                      <span>Specify the exact active DoT and sale quantity per tyre. Multiple DoTs can be logged under this same size invoice.</span>
                     </div>
                   </div>
                 )}
@@ -949,7 +1014,7 @@ export const TyreForm: React.FC<TyreFormProps> = ({
                   
                   <button
                     type="submit"
-                    disabled={isSaving || !saleDot}
+                    disabled={isSaving || saleDotQtys.some((item) => !item.dot)}
                     className="inline-flex items-center justify-center gap-2 text-sm font-medium text-white bg-rose-600 hover:bg-rose-700 disabled:opacity-40 disabled:cursor-not-allowed disabled:bg-gray-200 disabled:border-transparent px-5 py-2.5 rounded-lg border border-rose-700 transition-colors cursor-pointer shadow-sm shadow-rose-100"
                   >
                     {editingRecord ? <Save className="h-4 w-4" /> : <ShoppingCart className="h-4 w-4" />}
